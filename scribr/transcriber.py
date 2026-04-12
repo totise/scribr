@@ -8,8 +8,12 @@ Design:
   on_partial_result).
 
 Two transcription modes:
-  transcribe(audio)               — batch: fires on_result(text) when done
-  transcribe_chunk(audio, chunk_id) — chunked: fires on_partial_result(text, chunk_id)
+  transcribe(audio)                 — batch: fires on_result(text) when done
+  transcribe_chunk(audio, chunk_id) — chunked: fires on_partial_result(chunk_result, chunk_id)
+
+ChunkResult carries both the transcript text and, when the model supports it
+(TDT architecture), word-level timestamps. The pipeline uses timestamps to trim
+overlap regions precisely instead of relying on text stitching.
 
 States:
   idle         — no model loaded
@@ -27,6 +31,7 @@ import queue
 import tempfile
 import threading
 import wave
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable
 
@@ -37,10 +42,43 @@ log = logging.getLogger(__name__)
 # Type aliases
 StateCallback = Callable[["TranscriberState"], None]
 ResultCallback = Callable[[str], None]
-PartialResultCallback = Callable[[str, int], None]  # (text, chunk_id)
 ErrorCallback = Callable[[Exception], None]
 
 SAMPLE_RATE = 16_000  # Hz — required by all Parakeet models
+
+
+@dataclass
+class WordTimestamp:
+    word: str
+    start: float  # seconds relative to the start of the chunk
+    end: float  # seconds relative to the start of the chunk
+
+
+@dataclass
+class ChunkResult:
+    """
+    Result of a single chunk inference.
+
+    text        — full transcript for this chunk
+    words       — per-word timestamps (only populated for TDT models)
+    chunk_start — absolute start time of this chunk in the full recording (seconds)
+    chunk_end   — absolute end time of this chunk in the full recording (seconds)
+    has_timestamps — True if word-level timestamps are available
+    """
+
+    text: str
+    words: list[WordTimestamp] = field(default_factory=list)
+    chunk_start: float = 0.0
+    chunk_end: float = 0.0
+
+    @property
+    def has_timestamps(self) -> bool:
+        return len(self.words) > 0
+
+
+# PartialResultCallback receives the full ChunkResult so the pipeline can use
+# timestamps when available
+PartialResultCallback = Callable[["ChunkResult", int], None]
 
 
 class TranscriberState(Enum):
@@ -71,9 +109,10 @@ class _TranscribeCmd(_Command):
 
 
 class _TranscribeChunkCmd(_Command):
-    def __init__(self, audio: np.ndarray, chunk_id: int) -> None:
+    def __init__(self, audio: np.ndarray, chunk_id: int, chunk_start: float) -> None:
         self.audio = audio
         self.chunk_id = chunk_id
+        self.chunk_start = chunk_start  # absolute start time in the full recording
 
 
 class _UnloadCmd(_Command):
@@ -81,6 +120,12 @@ class _UnloadCmd(_Command):
 
 
 class _StopCmd(_Command):
+    pass
+
+
+class _MarkDoneCmd(_Command):
+    """Sentinel: all chunks have been queued; transition back to READY."""
+
     pass
 
 
@@ -97,14 +142,15 @@ class Transcriber:
         t = Transcriber(on_result=handle_text, ...)
         t.start()
         t.load("nvidia/parakeet-tdt-0.6b-v2")
-        t.transcribe(audio)          # → on_result(text)
+        t.transcribe(audio)
 
     Usage (chunked):
         t = Transcriber(on_partial_result=handle_partial, ...)
         t.start()
         t.load("nvidia/parakeet-rnnt-110m-da-dk")
-        t.transcribe_chunk(audio, chunk_id=0)   # → on_partial_result(text, 0)
-        t.transcribe_chunk(tail,  chunk_id=1)   # → on_partial_result(text, 1)
+        t.transcribe_chunk(audio, chunk_id=0, chunk_start=0.0)
+        t.transcribe_chunk(tail,  chunk_id=1, chunk_start=2.0)
+        t.mark_chunks_done()
     """
 
     def __init__(
@@ -116,7 +162,7 @@ class Transcriber:
     ) -> None:
         self._on_state_change = on_state_change or (lambda _: None)
         self._on_result = on_result or (lambda _: None)
-        self._on_partial_result = on_partial_result or (lambda t, i: None)
+        self._on_partial_result = on_partial_result or (lambda r, i: None)
         self._on_error = on_error or (lambda _: None)
 
         self._queue: queue.Queue[_Command] = queue.Queue()
@@ -124,6 +170,8 @@ class Transcriber:
         self._state = TranscriberState.IDLE
         self._model = None
         self._current_model_id: str | None = None
+        # Whether the loaded model supports word-level timestamps (TDT only)
+        self._supports_timestamps: bool = False
 
     # ------------------------------------------------------------------
     # Public API (thread-safe, non-blocking)
@@ -136,6 +184,11 @@ class Transcriber:
     @property
     def current_model_id(self) -> str | None:
         return self._current_model_id
+
+    @property
+    def supports_timestamps(self) -> bool:
+        """True when the loaded model can return word-level timestamps."""
+        return self._supports_timestamps
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -151,36 +204,41 @@ class Transcriber:
             self._thread.join(timeout=5)
 
     def load(self, model_id: str) -> None:
-        """Request loading of the given NeMo model ID. Non-blocking."""
         self._queue.put(_LoadCmd(model_id))
 
     def unload(self) -> None:
-        """Request unloading the current model to free RAM. Non-blocking."""
         self._queue.put(_UnloadCmd())
 
     def transcribe(self, audio: np.ndarray) -> None:
-        """
-        Batch transcription. Fires on_result(text) when complete.
-        audio: float32 numpy array, mono, 16 kHz.
-        """
+        """Batch mode — fires on_result(text)."""
         if self._state != TranscriberState.READY:
             log.warning("transcribe() called but state is %s — ignoring", self._state)
             return
         self._queue.put(_TranscribeCmd(audio))
 
-    def transcribe_chunk(self, audio: np.ndarray, chunk_id: int) -> None:
+    def transcribe_chunk(
+        self,
+        audio: np.ndarray,
+        chunk_id: int,
+        chunk_start: float = 0.0,
+    ) -> None:
         """
-        Chunked transcription. Fires on_partial_result(text, chunk_id) when complete.
-        Safe to call while a previous chunk is still being processed — commands
-        are queued and executed in order.
-        audio: float32 numpy array, mono, 16 kHz.
+        Chunked mode — fires on_partial_result(ChunkResult, chunk_id).
+        chunk_start: absolute start time of this chunk in the full recording (seconds).
         """
         if self._state not in (TranscriberState.READY, TranscriberState.TRANSCRIBING):
             log.warning(
                 "transcribe_chunk() called but state is %s — ignoring", self._state
             )
             return
-        self._queue.put(_TranscribeChunkCmd(audio, chunk_id))
+        self._queue.put(_TranscribeChunkCmd(audio, chunk_id, chunk_start))
+
+    def mark_chunks_done(self) -> None:
+        """
+        Signal that the final chunk has been queued. The worker will transition
+        state back to READY after processing it.
+        """
+        self._queue.put(_MarkDoneCmd())
 
     # ------------------------------------------------------------------
     # Worker
@@ -208,7 +266,7 @@ class Transcriber:
             elif isinstance(cmd, _TranscribeCmd):
                 self._do_transcribe(cmd.audio)
             elif isinstance(cmd, _TranscribeChunkCmd):
-                self._do_transcribe_chunk(cmd.audio, cmd.chunk_id)
+                self._do_transcribe_chunk(cmd.audio, cmd.chunk_id, cmd.chunk_start)
             elif isinstance(cmd, _MarkDoneCmd):
                 if self._state == TranscriberState.TRANSCRIBING:
                     self._set_state(TranscriberState.READY)
@@ -227,8 +285,13 @@ class Transcriber:
             model.eval()
             self._model = model
             self._current_model_id = model_id
+            self._supports_timestamps = _model_supports_timestamps(model)
+            log.info(
+                "Model ready: %s (timestamps=%s)",
+                model_id,
+                self._supports_timestamps,
+            )
             self._set_state(TranscriberState.READY)
-            log.info("Model ready: %s", model_id)
         except Exception as exc:
             log.exception("Failed to load model %s", model_id)
             self._set_state(TranscriberState.ERROR)
@@ -242,6 +305,7 @@ class Transcriber:
             del self._model
             self._model = None
             self._current_model_id = None
+            self._supports_timestamps = False
             try:
                 import torch  # noqa: PLC0415
 
@@ -258,9 +322,9 @@ class Transcriber:
             log.error("transcribe called with no model loaded")
             return
         self._set_state(TranscriberState.TRANSCRIBING)
-        log.info("Transcribing %.1fs of audio (batch)", len(audio) / SAMPLE_RATE)
+        log.info("Transcribing %.1fs (batch)", len(audio) / SAMPLE_RATE)
         try:
-            text = self._run_inference(audio)
+            text = _extract_text(self._run_inference(audio, timestamps=False))
             self._set_state(TranscriberState.READY)
             log.info("Batch result: %r", text)
             try:
@@ -272,21 +336,33 @@ class Transcriber:
             self._set_state(TranscriberState.ERROR)
             self._fire_error(exc)
 
-    def _do_transcribe_chunk(self, audio: np.ndarray, chunk_id: int) -> None:
+    def _do_transcribe_chunk(
+        self, audio: np.ndarray, chunk_id: int, chunk_start: float
+    ) -> None:
         if self._model is None:
             log.error("transcribe_chunk called with no model loaded")
             return
-        # Stay in TRANSCRIBING across consecutive chunks; only return to READY
-        # after the last chunk (signalled externally by the pipeline).
-        prev_state = self._state
-        if prev_state == TranscriberState.READY:
+        if self._state == TranscriberState.READY:
             self._set_state(TranscriberState.TRANSCRIBING)
-        log.info("Transcribing %.1fs chunk #%d", len(audio) / SAMPLE_RATE, chunk_id)
+        chunk_end = chunk_start + len(audio) / SAMPLE_RATE
+        log.info(
+            "Transcribing chunk #%d (%.1fs–%.1fs, timestamps=%s)",
+            chunk_id,
+            chunk_start,
+            chunk_end,
+            self._supports_timestamps,
+        )
         try:
-            text = self._run_inference(audio)
-            log.info("Chunk #%d result: %r", chunk_id, text)
+            raw = self._run_inference(audio, timestamps=self._supports_timestamps)
+            result = _build_chunk_result(raw, chunk_start, chunk_end)
+            log.info(
+                "Chunk #%d result: %r (words_with_ts=%d)",
+                chunk_id,
+                result.text,
+                len(result.words),
+            )
             try:
-                self._on_partial_result(text, chunk_id)
+                self._on_partial_result(result, chunk_id)
             except Exception:
                 log.exception("on_partial_result callback raised")
         except Exception as exc:
@@ -294,24 +370,17 @@ class Transcriber:
             self._set_state(TranscriberState.ERROR)
             self._fire_error(exc)
 
-    def mark_chunks_done(self) -> None:
-        """
-        Called by the pipeline after the final chunk has been queued.
-        Enqueues a sentinel that transitions state back to READY once the
-        worker processes it (i.e. after all queued chunks complete).
-        """
-        self._queue.put(_MarkDoneCmd())
-
-    def _run_inference(self, audio: np.ndarray) -> str:
+    def _run_inference(self, audio: np.ndarray, timestamps: bool = False):
+        """Run model.transcribe() and return the raw NeMo output object."""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
         try:
             _write_wav(tmp_path, audio, SAMPLE_RATE)
-            output = self._model.transcribe([tmp_path])
-            result = output[0]
-            if hasattr(result, "text"):
-                return result.text.strip()
-            return str(result).strip()
+            if timestamps:
+                output = self._model.transcribe([tmp_path], timestamps=True)
+            else:
+                output = self._model.transcribe([tmp_path])
+            return output[0]
         finally:
             try:
                 os.unlink(tmp_path)
@@ -325,10 +394,59 @@ class Transcriber:
             log.exception("on_error callback raised")
 
 
-class _MarkDoneCmd(_Command):
-    """Sentinel: all chunks have been queued; transition back to READY."""
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
 
-    pass
+
+def _model_supports_timestamps(model) -> bool:
+    """
+    Return True if this NeMo model is a TDT variant that outputs word timestamps.
+    We detect this by checking the class name (EncDecTDTBPEModel / EncDecTDTModel)
+    rather than attempting a probe inference.
+    """
+    class_name = type(model).__name__
+    return "TDT" in class_name
+
+
+def _extract_text(raw) -> str:
+    """Extract the transcript string from a NeMo result object or plain string."""
+    if hasattr(raw, "text"):
+        return raw.text.strip()
+    return str(raw).strip()
+
+
+def _build_chunk_result(raw, chunk_start: float, chunk_end: float) -> ChunkResult:
+    """
+    Convert a NeMo transcribe() output item into a ChunkResult.
+    Timestamps from NeMo are relative to the chunk's audio start (t=0),
+    so we offset them by chunk_start to get absolute times.
+    """
+    text = _extract_text(raw)
+    words: list[WordTimestamp] = []
+
+    # TDT models return timestamps under result.timestamp['word']
+    # Each entry: {'word': str, 'start': float, 'end': float}
+    try:
+        if hasattr(raw, "timestamp") and raw.timestamp:
+            word_stamps = raw.timestamp.get("word", [])
+            for w in word_stamps:
+                words.append(
+                    WordTimestamp(
+                        word=w["word"],
+                        start=w["start"] + chunk_start,
+                        end=w["end"] + chunk_start,
+                    )
+                )
+    except Exception:
+        log.debug("Could not extract word timestamps from result", exc_info=True)
+
+    return ChunkResult(
+        text=text,
+        words=words,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+    )
 
 
 def _write_wav(path: str, audio: np.ndarray, sample_rate: int) -> None:

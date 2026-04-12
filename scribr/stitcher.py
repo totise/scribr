@@ -7,21 +7,34 @@ Problem:
   chunk N and the head of chunk N+1. We must remove those duplicates before
   typing so the user doesn't see repeated words.
 
-Algorithm:
-  Given the tail words of the previous chunk and the head words of the new
-  chunk, find the longest suffix of the tail that matches a prefix of the new
-  chunk (an "overlap seam"). If found with sufficient confidence, strip that
-  prefix from the new chunk before returning it.
+Algorithm (scored-ratio, after HuggingFace Transformers ASR pipeline):
+  For each candidate overlap length n (from WINDOW down to MIN_MATCH):
+    score(n) = matches(tail[-n:], head[:n]) / n  +  n / 10_000
 
-  Uses a sliding-window comparison with normalised word matching (lowercased,
-  punctuation stripped) for robustness against minor capitalisation or
-  punctuation differences at the boundary.
+  Where matches() counts the number of aligned equal tokens as returned by
+  difflib.SequenceMatcher.  The small n/10_000 bias breaks ties in favour of
+  longer overlaps, which empirically reduces hallucinated insertions.
 
-Example:
+  The candidate with the highest score whose match fraction exceeds
+  MIN_SCORE_RATIO is selected.  If none qualifies, the chunk is returned as-is.
+
+  This is strictly better than exact matching: it handles the common case where
+  the ASR engine transcribes the overlap region with one or two word differences
+  across consecutive chunks (e.g. due to context shift).
+
+  No external dependencies — only difflib (stdlib).
+
+Example (exact):
   Previous tail : "the quick brown fox"
   New chunk     : "brown fox jumps over"
   Overlap found : "brown fox"
   Returned text : "jumps over"
+
+Example (fuzzy — one word differs in the overlap):
+  Previous tail : "I said hello to her"
+  New chunk     : "hello to him and then left"
+  Overlap found : "hello to [her≈him]"  (2/3 match ratio ≈ 0.67 — accepted)
+  Returned text : "and then left"
 
 Edge cases:
   - No overlap found → return new chunk as-is (simple space join)
@@ -31,17 +44,21 @@ Edge cases:
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 
 log = logging.getLogger(__name__)
 
 # How many words from each side to consider when searching for a seam.
-# Large enough to catch overlaps reliably, small enough to avoid false matches.
 WINDOW = 8
 
 # Minimum number of words that must match to count as a real overlap.
 MIN_MATCH = 2
+
+# Minimum fraction of words in the candidate window that must match.
+# 0.50 → at least half of the words must be equal (after normalisation).
+MIN_SCORE_RATIO = 0.50
 
 
 def _normalise(word: str) -> str:
@@ -51,6 +68,15 @@ def _normalise(word: str) -> str:
 
 def _words(text: str) -> list[str]:
     return text.split()
+
+
+def _count_matches(a: list[str], b: list[str]) -> int:
+    """
+    Count the number of equal elements between two equal-length sequences
+    using difflib.SequenceMatcher matching blocks.
+    """
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return sum(triple.size for triple in sm.get_matching_blocks())
 
 
 class Stitcher:
@@ -90,7 +116,7 @@ class Stitcher:
             log.debug("Chunk #%d (first): %r", self._chunk_index, chunk_text)
             return chunk_text
 
-        # Find the longest suffix of prev_tail that matches a prefix of new_words
+        # Find the best-scoring overlap seam between tail and head.
         prev_tail = self._prev_words[-WINDOW:]
         new_head = new_words[:WINDOW]
 
@@ -114,20 +140,28 @@ class Stitcher:
 
 def _find_overlap(tail: list[str], head: list[str]) -> int:
     """
-    Find the longest n such that the last n words of `tail` match
-    the first n words of `head` (case/punctuation-insensitive).
-    Returns 0 if no match of length >= 1 is found.
+    Find the overlap length n that maximises the scored-ratio:
+        score(n) = matches / n  +  n / 10_000
+
+    Only candidates where (matches / n) >= MIN_SCORE_RATIO are eligible.
+    Returns 0 if no qualifying overlap of length >= MIN_MATCH is found.
     """
     tail_norm = [_normalise(w) for w in tail]
     head_norm = [_normalise(w) for w in head]
 
-    best = 0
     max_check = min(len(tail_norm), len(head_norm))
 
-    for n in range(max_check, 0, -1):
-        # Does the last n words of tail match the first n words of head?
-        if tail_norm[-n:] == head_norm[:n]:
-            best = n
-            break
+    best_n = 0
+    best_score = -1.0
 
-    return best
+    for n in range(MIN_MATCH, max_check + 1):
+        matches = _count_matches(tail_norm[-n:], head_norm[:n])
+        ratio = matches / n
+        if ratio < MIN_SCORE_RATIO:
+            continue
+        score = ratio + n / 10_000
+        if score > best_score:
+            best_score = score
+            best_n = n
+
+    return best_n
