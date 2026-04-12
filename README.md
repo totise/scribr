@@ -4,13 +4,18 @@ macOS menu-bar dictation app powered by NVIDIA Parakeet ASR models.
 
 Hold **right Option** to record. Release to transcribe. Text is typed into whatever window has focus.
 
+Two transcription strategies are available per model:
+
+- **Batch** — hold key, release, single inference, text appears. Best accuracy.
+- **Chunked** — text is typed as you speak (pseudo-streaming). Audio is split into overlapping chunks and transcribed in parallel with recording. Best perceived latency.
+
 ---
 
 ## Requirements
 
 - macOS 12+
 - Python 3.11+
-- ~6 GB free RAM (for the English 0.6B model)
+- ~6 GB free RAM (for the English 0.6B model), ~2 GB for the Danish 110M model
 - Microphone access
 - Accessibility access (for global hotkeys and text injection)
 
@@ -98,8 +103,9 @@ The menu-bar icon reflects the active language and state:
 |---|---|
 | `EN` | English — ready |
 | `EN ⟳` | Loading model (~20s) |
-| `EN ●` | Recording |
-| `EN …` | Transcribing |
+| `EN ●` | Recording (batch) |
+| `EN ●…` | Recording + transcribing in parallel (chunked) |
+| `EN …` | Transcribing final chunk / full batch |
 | `EN ✕` | Error |
 
 ---
@@ -117,13 +123,28 @@ model_id = "nvidia/parakeet-tdt-0.6b-v2"
 label = "English"
 icon = "EN"
 enabled = true
+strategy = "batch"         # single inference after key release
 
 [models.danish]
 model_id = "nvidia/parakeet-rnnt-110m-da-dk"
 label = "Danish"
 icon = "DA"
 enabled = true
+strategy = "chunked"       # text typed as you speak
+chunk_seconds = 2.5        # length of each audio chunk sent to the model
+overlap_seconds = 0.5      # overlap between chunks for boundary stitching
 ```
+
+After editing, use **Reload Config** from the menu — no restart needed.
+
+### Transcription strategies
+
+| Strategy | How it works | Best for |
+|---|---|---|
+| `batch` | Full audio sent as one inference after key release | Accuracy, short recordings |
+| `chunked` | Audio split into overlapping chunks; results typed as they arrive | Perceived speed, longer dictation |
+
+In chunked mode, consecutive chunks share a 0.5 s overlap window. A stitcher compares the tail of each chunk result against the head of the next and removes duplicated words before typing.
 
 ### Adding a model
 
@@ -135,6 +156,7 @@ model_id = "nvidia/parakeet-tdt-0.6b-v3"
 label = "Multilingual"
 icon = "ML"
 enabled = true
+strategy = "batch"
 ```
 
 Any model from the `nvidia/parakeet-*` family on HuggingFace can be used.
@@ -146,4 +168,5 @@ Any model from the `nvidia/parakeet-*` family on HuggingFace can be used.
 - **Model switching takes ~20 seconds** — the model must be fully unloaded from RAM and the new one loaded. The icon shows `⟳` while loading. The record hotkey is disabled during this time.
 - Models are downloaded to `~/.cache/huggingface/` on first use and cached locally.
 - Only one model is loaded at a time to conserve RAM.
+- **Chunked mode latency** — expect ~1–2 s lag between speech and text appearing, depending on CPU speed. The 110M Danish model is faster per chunk than the 600M English model.
 - Logs are written to stderr. Run from a terminal to see them.
