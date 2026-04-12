@@ -1,14 +1,15 @@
 """
 app.py — rumps menu-bar application.
 
-Coordinates config, transcriber, recorder, hotkeys, and injector.
+Coordinates config, transcriber, pipeline, hotkeys, and injector.
 Manages the menu-bar icon and menu items.
 
 Icon text format:
   "EN"     — ready
-  "EN ⟳"  — loading
-  "EN ●"  — recording
-  "EN …"  — transcribing
+  "EN ⟳"  — loading model
+  "EN ●"  — recording (batch) or recording before first chunk (chunked)
+  "EN ●…" — recording + parallel transcription in progress (chunked)
+  "EN …"  — transcribing final chunk / full batch
   "EN ✕"  — error
 """
 
@@ -23,13 +24,22 @@ import rumps
 from . import config as cfg
 from .hotkeys import HotkeyListener
 from .injector import Injector
-from .recorder import Recorder
+from .pipeline import PipelineState, _BasePipeline, make_pipeline
 from .transcriber import Transcriber, TranscriberState
 
 log = logging.getLogger(__name__)
 
-# Suffix appended to the icon base for each transcriber state
-_STATE_SUFFIX: dict[TranscriberState, str] = {
+# Menu-bar icon suffixes per pipeline state
+_PIPELINE_SUFFIX: dict[PipelineState, str] = {
+    PipelineState.IDLE: "",
+    PipelineState.RECORDING: " ●",
+    PipelineState.RECORDING_TRANSCRIBING: " ●…",
+    PipelineState.TRANSCRIBING: " …",
+    PipelineState.DONE: "",
+}
+
+# Menu-bar icon suffixes per transcriber state (used when no pipeline is active)
+_TRANSCRIBER_SUFFIX: dict[TranscriberState, str] = {
     TranscriberState.IDLE: " ⟳",
     TranscriberState.LOADING: " ⟳",
     TranscriberState.READY: "",
@@ -37,15 +47,13 @@ _STATE_SUFFIX: dict[TranscriberState, str] = {
     TranscriberState.ERROR: " ✕",
 }
 
-_STATE_LABEL: dict[TranscriberState, str] = {
+_TRANSCRIBER_LABEL: dict[TranscriberState, str] = {
     TranscriberState.IDLE: "Idle",
     TranscriberState.LOADING: "Loading…",
     TranscriberState.READY: "Ready",
     TranscriberState.TRANSCRIBING: "Transcribing…",
     TranscriberState.ERROR: "Error — check logs",
 }
-
-RECORDING_SUFFIX = " ●"
 
 
 class ScribrApp(rumps.App):
@@ -57,12 +65,13 @@ class ScribrApp(rumps.App):
         super().__init__(name="Scribr", title=initial_icon, quit_button=None)
 
         self._injector = Injector()
-        self._recorder = Recorder(on_complete=self._on_audio_ready)
         self._transcriber = Transcriber(
             on_state_change=self._on_transcriber_state,
-            on_result=self._on_transcription_result,
             on_error=self._on_transcription_error,
         )
+        self._pipeline: _BasePipeline | None = None
+        self._pipeline_lock = threading.Lock()
+
         self._hotkeys = HotkeyListener(
             on_record_start=self._on_record_start,
             on_record_stop=self._on_record_stop,
@@ -70,8 +79,8 @@ class ScribrApp(rumps.App):
             selector_hotkey=self._config.selector_hotkey,
         )
 
-        self._recording = False
-        self._current_state = TranscriberState.IDLE
+        self._transcriber_state = TranscriberState.IDLE
+        self._pipeline_state = PipelineState.IDLE
         self._state_lock = threading.Lock()
 
         self._build_menu()
@@ -81,7 +90,6 @@ class ScribrApp(rumps.App):
     # ------------------------------------------------------------------
 
     def run(self) -> None:  # type: ignore[override]
-        """Start background services then hand off to rumps event loop."""
         self._transcriber.start()
         self._hotkeys.start()
         self._load_active_model()
@@ -89,9 +97,28 @@ class ScribrApp(rumps.App):
 
     def _load_active_model(self) -> None:
         active = self._config.active
-        if active:
-            log.info("Loading active model on startup: %s", active.model_id)
-            self._transcriber.load(active.model_id)
+        if not active:
+            return
+        log.info(
+            "Loading active model: %s (strategy=%s)", active.model_id, active.strategy
+        )
+        self._transcriber.load(active.model_id)
+
+    def _rebuild_pipeline(self) -> None:
+        """Instantiate the correct pipeline for the currently active model."""
+        active = self._config.active
+        if not active:
+            return
+        with self._pipeline_lock:
+            self._pipeline = make_pipeline(
+                strategy=active.strategy,
+                transcriber=self._transcriber,
+                chunk_seconds=active.chunk_seconds,
+                overlap_seconds=active.overlap_seconds,
+            )
+            self._pipeline.on_result = self._on_pipeline_result
+            self._pipeline.on_state_change = self._on_pipeline_state
+        log.info("Pipeline ready: %s", active.strategy)
 
     # ------------------------------------------------------------------
     # Menu construction
@@ -137,25 +164,27 @@ class ScribrApp(rumps.App):
         return callback
 
     # ------------------------------------------------------------------
-    # Icon / status helpers (safe to call from any thread)
+    # Icon / status helpers
     # ------------------------------------------------------------------
 
-    def _set_icon(self, icon_text: str) -> None:
-        """Update the menu bar title. rumps title assignment is thread-safe."""
-        self.title = icon_text
+    def _icon_base(self) -> str:
+        active = self._config.active
+        return active.icon if active else "??"
 
     def _refresh_icon(self) -> None:
-        """Recompute and apply the icon from current state."""
-        active = self._config.active
-        base = active.icon if active else "??"
         with self._state_lock:
-            recording = self._recording
-            state = self._current_state
-        if recording:
-            suffix = RECORDING_SUFFIX
+            ps = self._pipeline_state
+            ts = self._transcriber_state
+
+        base = self._icon_base()
+
+        # Pipeline state takes precedence when active
+        if ps not in (PipelineState.IDLE, PipelineState.DONE):
+            suffix = _PIPELINE_SUFFIX.get(ps, "")
         else:
-            suffix = _STATE_SUFFIX.get(state, "")
-        self._set_icon(base + suffix)
+            suffix = _TRANSCRIBER_SUFFIX.get(ts, "")
+
+        self.title = base + suffix
 
     def _set_status(self, text: str) -> None:
         self._status_item.title = f"Status: {text}"
@@ -167,65 +196,61 @@ class ScribrApp(rumps.App):
     def _switch_model(self, model_key: str) -> None:
         if model_key == self._config.active_model:
             return
-
         model = self._config.models.get(model_key)
         if not model:
             log.error("Unknown model key: %s", model_key)
             return
 
-        log.info("Switching to model: %s (%s)", model_key, model.model_id)
+        log.info(
+            "Switching to model: %s (%s, strategy=%s)",
+            model_key,
+            model.model_id,
+            model.strategy,
+        )
 
-        # Stop any in-progress recording
-        with self._state_lock:
-            if self._recording:
-                self._recording = False
-                self._recorder.stop()
+        # Stop any active recording
+        with self._pipeline_lock:
+            pipeline = self._pipeline
+        if pipeline and pipeline.is_active:
+            pipeline.stop_recording()
 
         # Persist selection
         self._config.active_model = model_key
         cfg.save_active_model(model_key)
 
-        # Update UI immediately
+        # Reset pipeline while new model loads
+        with self._pipeline_lock:
+            self._pipeline = None
+        with self._state_lock:
+            self._pipeline_state = PipelineState.IDLE
+
         self._refresh_icon()
         self._set_status("Loading…")
         self._populate_switch_menu()
 
-        # Kick off load (unloads previous model first)
+        # Request new model load; pipeline is rebuilt in _on_transcriber_state → READY
         self._transcriber.load(model.model_id)
 
     # ------------------------------------------------------------------
-    # Hotkey callbacks (called from pynput thread)
+    # Hotkey callbacks (pynput thread)
     # ------------------------------------------------------------------
 
     def _on_record_start(self) -> None:
-        with self._state_lock:
-            if self._current_state != TranscriberState.READY:
-                return
-            if self._recording:
-                return
-            self._recording = True
-
-        self._refresh_icon()
-        self._set_status("Recording…")
-        try:
-            self._recorder.start()
-        except Exception:
-            log.exception("Failed to start recorder")
-            with self._state_lock:
-                self._recording = False
-            self._refresh_icon()
+        with self._pipeline_lock:
+            pipeline = self._pipeline
+        if pipeline is None:
+            log.debug("Record start ignored — no pipeline (model loading?)")
+            return
+        pipeline.start_recording()
 
     def _on_record_stop(self) -> None:
-        with self._state_lock:
-            if not self._recording:
-                return
-            self._recording = False
-
-        self._refresh_icon()
-        self._recorder.stop()  # triggers _on_audio_ready
+        with self._pipeline_lock:
+            pipeline = self._pipeline
+        if pipeline is None:
+            return
+        pipeline.stop_recording()
 
     def _on_selector_hotkey(self) -> None:
-        """Show model selector dialog (runs in a background thread to avoid blocking hotkey listener)."""
         threading.Thread(
             target=self._show_model_selector_dialog,
             daemon=True,
@@ -269,32 +294,49 @@ class ScribrApp(rumps.App):
             log.exception("Model selector dialog failed")
 
     # ------------------------------------------------------------------
-    # Audio / transcription callbacks (called from background threads)
+    # Pipeline callbacks (background threads)
     # ------------------------------------------------------------------
 
-    def _on_audio_ready(self, audio) -> None:
-        """Recorder finished — submit audio to transcriber."""
-        log.debug("Audio ready — submitting for transcription")
-        self._set_status("Transcribing…")
-        self._transcriber.transcribe(audio)
+    def _on_pipeline_result(self, text: str) -> None:
+        """Text is ready — inject into active window."""
+        log.info("Pipeline result: %r", text)
+        threading.Thread(
+            target=self._injector.type_text,
+            args=(text,),
+            daemon=True,
+            name="injector",
+        ).start()
+
+    def _on_pipeline_state(self, state: PipelineState) -> None:
+        with self._state_lock:
+            self._pipeline_state = state
+        self._refresh_icon()
+
+        labels = {
+            PipelineState.IDLE: _TRANSCRIBER_LABEL.get(
+                self._transcriber_state, "Ready"
+            ),
+            PipelineState.RECORDING: "Recording…",
+            PipelineState.RECORDING_TRANSCRIBING: "Recording + transcribing…",
+            PipelineState.TRANSCRIBING: "Transcribing…",
+            PipelineState.DONE: "Done",
+        }
+        self._set_status(labels.get(state, str(state)))
+
+    # ------------------------------------------------------------------
+    # Transcriber callbacks (background thread)
+    # ------------------------------------------------------------------
 
     def _on_transcriber_state(self, state: TranscriberState) -> None:
-        """Transcriber state changed — update UI."""
         with self._state_lock:
-            self._current_state = state
-        self._refresh_icon()
-        self._set_status(_STATE_LABEL.get(state, str(state)))
+            self._transcriber_state = state
 
-    def _on_transcription_result(self, text: str) -> None:
-        """Inference complete — inject text."""
-        log.info("Transcription: %r", text)
-        if text:
-            threading.Thread(
-                target=self._injector.type_text,
-                args=(text,),
-                daemon=True,
-                name="injector",
-            ).start()
+        # When model becomes READY, build/rebuild the pipeline
+        if state == TranscriberState.READY:
+            self._rebuild_pipeline()
+
+        self._refresh_icon()
+        self._set_status(_TRANSCRIBER_LABEL.get(state, str(state)))
 
     def _on_transcription_error(self, exc: Exception) -> None:
         log.error("Transcription error: %s", exc)

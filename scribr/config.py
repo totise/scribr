@@ -30,6 +30,9 @@ class ModelConfig:
     label: str  # Human-readable name, e.g. "English"
     icon: str  # Short string shown in menu bar, e.g. "EN"
     enabled: bool = True
+    strategy: str = "batch"  # "batch" or "chunked"
+    chunk_seconds: float = 2.5  # chunk length (chunked mode only)
+    overlap_seconds: float = 0.5  # overlap between consecutive chunks
 
 
 @dataclass
@@ -86,6 +89,9 @@ def load() -> Config:
             label=val.get("label", key.capitalize()),
             icon=val.get("icon", key[:2].upper()),
             enabled=val.get("enabled", True),
+            strategy=val.get("strategy", "batch"),
+            chunk_seconds=float(val.get("chunk_seconds", 2.5)),
+            overlap_seconds=float(val.get("overlap_seconds", 0.5)),
         )
 
     active = raw.get("active_model", next(iter(models), "english"))
