@@ -1,0 +1,21 @@
+active_model = "english"
+selector_hotkey = "<ctrl>+<shift>+<space>"
+
+[models.english]
+model_id = "nvidia/parakeet-tdt-0.6b-v2"
+label = "English"
+icon = "EN"
+enabled = true
+
+[models.danish]
+model_id = "nvidia/parakeet-rnnt-110m-da-dk"
+label = "Danish"
+icon = "DA"
+enabled = true
+
+# To add more models, copy a block like this:
+# [models.french]
+# model_id = "nvidia/parakeet-tdt-0.6b-v3"
+# label = "French"
+# icon = "FR"
+# enabled = true

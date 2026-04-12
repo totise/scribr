@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "scribr"
+version = "0.1.0"
+description = "macOS menu-bar dictation app powered by NVIDIA Parakeet ASR models"
+requires-python = ">=3.11"
+dependencies = [
+    "sounddevice>=0.4.6",
+    "numpy>=1.26",
+    "pynput>=1.7.6",
+    "rumps>=0.4.0",
+    # nemo_toolkit[asr] must be installed separately due to torch pre-install requirement
+    # See README.md for installation instructions
+]
+
+[project.scripts]
+scribr = "scribr.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scribr*"]
