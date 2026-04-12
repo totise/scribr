@@ -144,7 +144,12 @@ After editing, use **Reload Config** from the menu — no restart needed.
 | `batch` | Full audio sent as one inference after key release | Accuracy, short recordings |
 | `chunked` | Audio split into overlapping chunks; results typed as they arrive | Perceived speed, longer dictation |
 
-In chunked mode, consecutive chunks share a 0.5 s overlap window. A stitcher compares the tail of each chunk result against the head of the next and removes duplicated words before typing.
+In chunked mode, consecutive chunks share an `overlap_seconds` window. Overlap removal is chosen automatically based on the model:
+
+| Model family | Overlap removal | How |
+|---|---|---|
+| `parakeet-tdt-*` (English) | **Timestamp trimming** | Word timestamps from the model are used to drop words whose midpoint falls inside the overlap window. No text alignment needed — most robust. |
+| `parakeet-rnnt-*` (Danish) | **Scored-ratio stitching** | `difflib.SequenceMatcher` finds the best-scoring overlap prefix. Score = `matches/n + n/10000` (HuggingFace approach). Falls back gracefully when there is no overlap. |
 
 ### Adding a model
 
