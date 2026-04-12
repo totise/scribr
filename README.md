@@ -18,28 +18,49 @@ Hold **right Option** to record. Release to transcribe. Text is typed into whate
 
 ## Installation
 
-### 1. Install PyTorch
-
-Install PyTorch first (NeMo requires it as a pre-requisite):
+### One-line install (recommended)
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/totise/scribr/main/install.sh | bash
+```
+
+This will:
+1. Create a self-contained virtualenv at `~/.scribr/venv`
+2. Install PyTorch, NeMo ASR, and all dependencies into it
+3. Write a `scribr` launcher and symlink it to `/usr/local/bin`
+
+Models (~2.5 GB for English, ~450 MB for Danish) are downloaded from HuggingFace on first use and cached in `~/.cache/huggingface/`.
+
+### Manual install
+
+Clone the repo and run the install script directly:
+
+```bash
+git clone https://github.com/totise/scribr.git
+cd scribr
+./install.sh
+```
+
+### Developer install
+
+To install in editable mode from your local clone:
+
+```bash
+git clone https://github.com/totise/scribr.git
+cd scribr
+./install.sh --dev
+```
+
+### Manual step-by-step
+
+If you prefer full control:
+
+```bash
+python3.11 -m venv ~/.scribr/venv
+source ~/.scribr/venv/bin/activate
 pip install torch torchaudio
-```
-
-For Apple Silicon you can also enable MPS (Metal Performance Shaders) — NeMo will use it automatically if available.
-
-### 2. Install NeMo and app dependencies
-
-```bash
 pip install "nemo_toolkit[asr]>=2.5.0"
-pip install sounddevice numpy pynput rumps
-```
-
-### 3. Install Scribr
-
-```bash
-cd /path/to/scribr
-pip install -e .
+pip install -e /path/to/scribr
 ```
 
 ---
