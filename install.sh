@@ -56,10 +56,9 @@ success "Platform: macOS $(sw_vers -productVersion)"
 
 # ── Python check ────────────────────────────────────────────────────────────
 PYTHON=""
-for candidate in python3.13 python3.12 python3.11; do
+for candidate in python3.11; do
   if command -v "$candidate" &>/dev/null; then
-    ver=$("$candidate" -c 'import sys; print(sys.version_info[:2])')
-    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null; then
+    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3,11) else 1)' 2>/dev/null; then
       PYTHON="$candidate"
       break
     fi
@@ -67,21 +66,12 @@ for candidate in python3.13 python3.12 python3.11; do
 done
 
 if [[ -z "$PYTHON" ]]; then
-  # Fall back to plain python3
-  if command -v python3 &>/dev/null; then
-    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null; then
-      PYTHON="python3"
-    fi
-  fi
-fi
-
-if [[ -z "$PYTHON" ]]; then
-  error "Python 3.11+ is required but was not found."
+  error "Python 3.11 is required but was not found."
   echo ""
   echo "  Install it via Homebrew:"
   echo "    brew install python@3.11"
   echo ""
-  echo "  Or download from: https://www.python.org/downloads/"
+  echo "  Or download from: https://www.python.org/downloads/releases/"
   exit 1
 fi
 
