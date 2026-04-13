@@ -91,9 +91,17 @@ class ScribrApp(rumps.App):
 
     def run(self) -> None:  # type: ignore[override]
         self._transcriber.start()
-        self._hotkeys.start()
         self._load_active_model()
+        # NSEvent global monitors must be installed after the Cocoa run loop
+        # has started.  Schedule a one-shot timer to do so on the first tick.
+        self._startup_timer = rumps.Timer(self._on_startup_tick, 0.1)
+        self._startup_timer.start()
         super().run()
+
+    def _on_startup_tick(self, _timer) -> None:
+        """Called on the first run-loop tick — safe to install NSEvent monitors."""
+        self._startup_timer.stop()
+        self._hotkeys.start()
 
     def _load_active_model(self) -> None:
         active = self._config.active
