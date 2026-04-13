@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68,<82", "wheel"]
+requires = ["setuptools==68.2.2", "wheel<0.45"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
