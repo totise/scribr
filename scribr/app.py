@@ -146,7 +146,10 @@ class ScribrApp(rumps.App):
         self.menu.add(rumps.MenuItem("Quit", callback=self._quit))
 
     def _populate_switch_menu(self) -> None:
-        self._switch_menu.clear()
+        # rumps MenuItem._menu is None until the first child is added;
+        # calling .clear() on it before that raises AttributeError.
+        if self._switch_menu._menu is not None:
+            self._switch_menu.clear()
         for model in self._config.enabled_models:
             label = model.label
             if model.key == self._config.active_model:
