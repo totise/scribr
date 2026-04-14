@@ -1,0 +1,18 @@
+# Node
+node_modules/
+dist/
+.env
+.env.local
+
+# Rust / Cargo
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Tauri
+src-tauri/gen/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

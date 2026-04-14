@@ -1,0 +1,60 @@
+[package]
+name = "scribr"
+version = "0.1.0"
+description = "Scribr — global dictation powered by whisper.cpp"
+authors = []
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "scribr_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "scribr"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+# ASR
+whisper-rs = { version = "0.14", features = ["metal"] }
+
+# Audio
+cpal = "0.15"
+rubato = "0.16"
+
+# HTTP / downloads
+reqwest = { version = "0.12", features = ["stream", "json"] }
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+
+[features]
+# this feature is used for production builds or when a dev server is not specified
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

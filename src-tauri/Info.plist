@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hide Dock icon: pure menu-bar app -->
+  <key>LSUIElement</key>
+  <true/>
+
+  <!-- Microphone permission prompt -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Scribr needs microphone access to transcribe your speech.</string>
+
+  <!-- Accessibility permission prompt (for text injection) -->
+  <key>NSAccessibilityUsageDescription</key>
+  <string>Scribr needs accessibility access to type transcribed text into other apps.</string>
+
+  <!-- Required for global hotkey monitoring -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Scribr uses Apple Events for system integration.</string>
+</dict>
+</plist>
