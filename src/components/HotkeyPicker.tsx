@@ -118,53 +118,50 @@ function formatHotkey(value: string): string {
         case "right":
           return "→";
         default:
+          // Strip "Key" prefix (e.g. "KeyD" → "D"), then uppercase single chars
+          if (/^[Kk]ey[A-Za-z]$/.test(part)) return part.slice(3).toUpperCase();
           return part.length === 1 ? part.toUpperCase() : part;
       }
     })
     .join(" ");
 }
 
-/** Map a browser KeyboardEvent to tauri shortcut key name. */
+/** Map a browser KeyboardEvent to tauri global-shortcut key name.
+ *
+ * The global-hotkey crate parses keys case-insensitively and accepts both
+ * "KeyD" (W3C code) and plain "D". We prefer the "KeyX" form for letter keys
+ * because it is unambiguous regardless of keyboard layout.
+ */
 function mapKey(code: string, key: string): string {
-  // Function keys
-  if (/^F\d+$/.test(key)) return key.toLowerCase();
+  // Function keys — F1..F24
+  if (/^F\d+$/.test(key)) return key; // "F1" etc. — already correct case
+
+  // Letter keys — use W3C code form ("KeyA".."KeyZ") which the parser accepts
+  if (/^Key[A-Z]$/.test(code)) return code; // e.g. "KeyD"
+
+  // Digit keys — use W3C code form ("Digit0".."Digit9")
+  if (/^Digit\d$/.test(code)) return code; // e.g. "Digit5"
 
   // Special keys
   switch (code) {
-    case "Space":
-      return "space";
-    case "Enter":
-      return "return";
-    case "Tab":
-      return "tab";
-    case "Escape":
-      return "escape";
-    case "Backspace":
-      return "backspace";
-    case "Delete":
-      return "delete";
-    case "ArrowUp":
-      return "up";
-    case "ArrowDown":
-      return "down";
-    case "ArrowLeft":
-      return "left";
-    case "ArrowRight":
-      return "right";
-    case "Home":
-      return "home";
-    case "End":
-      return "end";
-    case "PageUp":
-      return "pageup";
-    case "PageDown":
-      return "pagedown";
-    case "Insert":
-      return "insert";
-    case "CapsLock":
-      return "capslock";
+    case "Space":      return "space";
+    case "Enter":      return "return";
+    case "Tab":        return "tab";
+    case "Escape":     return "escape";
+    case "Backspace":  return "backspace";
+    case "Delete":     return "delete";
+    case "ArrowUp":    return "up";
+    case "ArrowDown":  return "down";
+    case "ArrowLeft":  return "left";
+    case "ArrowRight": return "right";
+    case "Home":       return "home";
+    case "End":        return "end";
+    case "PageUp":     return "pageup";
+    case "PageDown":   return "pagedown";
+    case "Insert":     return "insert";
+    case "CapsLock":   return "capslock";
     default:
-      // Regular key — use the key value, lowercased
+      // Fallback: use the key value lowercased (covers symbols etc.)
       return key.toLowerCase();
   }
 }

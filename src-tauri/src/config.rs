@@ -14,9 +14,10 @@ pub struct Settings {
 
     /// Hotkey string for push-to-talk record (e.g. "alt+space").
     /// Parsed by tauri-plugin-global-shortcut.
+    /// Format: modifier(s) + key, e.g. "ctrl+shift+KeyD", "alt+F1".
     pub record_hotkey: String,
 
-    /// Hotkey string for cycling models (e.g. "ctrl+shift+space").
+    /// Hotkey string for cycling models (e.g. "ctrl+shift+KeyM").
     pub switch_hotkey: String,
 
     /// Per-model language override.  Key = model_id, value = language code
@@ -34,8 +35,12 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             active_model: None,
-            record_hotkey: "alt+space".to_string(),
-            switch_hotkey: "ctrl+shift+space".to_string(),
+            // ctrl+shift+D — unlikely to conflict with system shortcuts on macOS.
+            // Users can change this in Settings. alt+space is reserved by input
+            // method switching on many systems.
+            record_hotkey: "ctrl+shift+KeyD".to_string(),
+            // ctrl+shift+M — cycles through downloaded models
+            switch_hotkey: "ctrl+shift+KeyM".to_string(),
             model_languages: std::collections::HashMap::new(),
             injection_delay_ms: 150,
             launch_at_login: false,

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     AppHandle, Manager,
@@ -13,12 +14,24 @@ use crate::transcriber::Transcriber;
 
 const TRAY_ID: &str = "main";
 
+// Embedded icon PNG (32x32 RGBA) — guaranteed to exist at compile time.
+// Using include_bytes! avoids any runtime file-not-found panic and also
+// avoids the crash from calling .unwrap() on default_window_icon() which
+// returns None for LSUIElement (no-Dock) apps on some macOS versions.
+const ICON_BYTES: &[u8] = include_bytes!("../../icons/32x32.png");
+
+fn tray_icon() -> Image<'static> {
+    Image::from_bytes(ICON_BYTES)
+        .expect("icons/32x32.png embedded in binary is corrupt — regenerate it")
+}
+
 /// Called once at app startup to create the tray icon.
 pub fn setup(app: &AppHandle, settings: &Settings) -> Result<()> {
     let menu = build_menu(app, settings)?;
 
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(tray_icon())
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("Scribr")
@@ -91,15 +104,17 @@ fn show_settings_window(app: &AppHandle) {
 }
 
 /// Register (or re-register) both configurable hotkeys.
+/// Individual registration failures are logged but do NOT propagate —
+/// a bad/conflicting hotkey string must not crash the app.
 pub fn apply_hotkeys(app: &AppHandle, settings: &Settings) -> Result<()> {
-    // Unregister all existing shortcuts first
+    // Unregister all existing shortcuts first (ignore errors — nothing registered yet on first call)
     let _ = app.global_shortcut().unregister_all();
 
     let record_hotkey = settings.record_hotkey.clone();
     let switch_hotkey = settings.switch_hotkey.clone();
 
     // Record hotkey: press = start recording, release = stop + transcribe
-    app.global_shortcut().on_shortcut(
+    match app.global_shortcut().on_shortcut(
         record_hotkey.as_str(),
         move |app, _shortcut, event| {
             let handle = app.clone();
@@ -125,10 +140,13 @@ pub fn apply_hotkeys(app: &AppHandle, settings: &Settings) -> Result<()> {
                 }
             }
         },
-    )?;
+    ) {
+        Ok(_) => log::info!("Record hotkey registered: {record_hotkey}"),
+        Err(e) => log::warn!("Could not register record hotkey '{record_hotkey}': {e}"),
+    }
 
     // Model-switch hotkey: press only
-    app.global_shortcut().on_shortcut(
+    match app.global_shortcut().on_shortcut(
         switch_hotkey.as_str(),
         move |app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
@@ -140,7 +158,10 @@ pub fn apply_hotkeys(app: &AppHandle, settings: &Settings) -> Result<()> {
                 });
             }
         },
-    )?;
+    ) {
+        Ok(_) => log::info!("Switch hotkey registered: {switch_hotkey}"),
+        Err(e) => log::warn!("Could not register switch hotkey '{switch_hotkey}': {e}"),
+    }
 
     Ok(())
 }

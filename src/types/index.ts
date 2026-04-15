@@ -11,8 +11,8 @@ export interface Settings {
 
 export const defaultSettings: Settings = {
   activeModel: null,
-  recordHotkey: "alt+space",
-  switchHotkey: "ctrl+shift+space",
+  recordHotkey: "ctrl+shift+KeyD",
+  switchHotkey: "ctrl+shift+KeyM",
   modelLanguages: {},
   injectionDelayMs: 150,
   launchAtLogin: false,
