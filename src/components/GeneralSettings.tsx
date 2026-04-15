@@ -32,39 +32,43 @@ export default function GeneralSettings({ settings, onSave }: Props) {
   };
 
   return (
-    <div className="space-y-6 max-w-lg">
-      <h2 className="text-base font-semibold text-gray-900">General</h2>
+    <div className="space-y-3 max-w-lg">
+      <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide px-0.5">
+        General
+      </h2>
 
-      {/* Launch at login */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-800">Launch at login</p>
-          <p className="text-xs text-gray-500 mt-0.5">Start Scribr automatically when you log in.</p>
+      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+        {/* Launch at login */}
+        <div className="flex items-center justify-between px-4 py-3.5">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Launch at login</p>
+            <p className="text-xs text-gray-400 mt-0.5">Start Scribr automatically when you log in.</p>
+          </div>
+          <Toggle checked={autostartEnabled} onChange={toggleAutostart} />
         </div>
-        <Toggle checked={autostartEnabled} onChange={toggleAutostart} />
-      </div>
 
-      {/* Injection delay */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <label className="block text-sm font-medium text-gray-800 mb-1">
-          Text injection delay
-        </label>
-        <p className="text-xs text-gray-500 mb-3">
-          Milliseconds to wait before typing transcribed text. Increase if text lands in the wrong app.
-        </p>
-        <div className="flex items-center gap-3">
-          <input
-            type="number"
-            min={0}
-            max={2000}
-            step={50}
-            value={settings.injectionDelayMs}
-            onChange={(e) =>
-              onSave({ ...settings, injectionDelayMs: parseInt(e.target.value, 10) || 0 })
-            }
-            className="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-          />
-          <span className="text-sm text-gray-500">ms</span>
+        {/* Injection delay */}
+        <div className="flex items-center justify-between px-4 py-3.5">
+          <div className="flex-1 min-w-0 pr-4">
+            <p className="text-sm font-medium text-gray-800">Injection delay</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Milliseconds to wait before typing. Increase if text lands in the wrong window.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <input
+              type="number"
+              min={0}
+              max={2000}
+              step={50}
+              value={settings.injectionDelayMs}
+              onChange={(e) =>
+                onSave({ ...settings, injectionDelayMs: parseInt(e.target.value, 10) || 0 })
+              }
+              className="w-20 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <span className="text-xs text-gray-400 w-5">ms</span>
+          </div>
         </div>
       </div>
     </div>
@@ -77,8 +81,8 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void 
       role="switch"
       aria-checked={checked}
       onClick={onChange}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-        checked ? "bg-blue-600" : "bg-gray-200"
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+        checked ? "bg-blue-500" : "bg-gray-200"
       }`}
     >
       <span

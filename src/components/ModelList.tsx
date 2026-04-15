@@ -9,6 +9,18 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1e3).toFixed(0)} KB`;
 }
 
+const LANGUAGES = [
+  { value: "auto", label: "Auto-detect" },
+  { value: "en", label: "English" },
+  { value: "da", label: "Danish" },
+  { value: "de", label: "German" },
+  { value: "fr", label: "French" },
+  { value: "es", label: "Spanish" },
+  { value: "nl", label: "Dutch" },
+  { value: "sv", label: "Swedish" },
+  { value: "no", label: "Norwegian" },
+];
+
 interface Props {
   settings: Settings;
   onSave: (s: Settings) => void;
@@ -18,15 +30,17 @@ export default function ModelList({ settings, onSave }: Props) {
   const { models, loading } = useModels();
 
   if (loading) {
-    return <div className="text-sm text-gray-500 p-4">Loading models…</div>;
+    return (
+      <div className="flex items-center justify-center py-12 text-sm text-gray-400">
+        Loading…
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-semibold text-gray-900">Models</h2>
-      <p className="text-xs text-gray-500">
-        All models support 99 languages including Danish. No models are included — download
-        what you need.
+    <div className="space-y-2">
+      <p className="text-xs text-gray-500 pb-1">
+        Models are downloaded to your Mac and run entirely offline. Download at least one to get started.
       </p>
       {models.map((model) => (
         <ModelCard
@@ -54,159 +68,197 @@ function ModelCard({
   language: string;
   onLanguageChange: (lang: string) => void;
 }) {
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
 
   const state = model.state;
   const isActive = state.type === "Active";
   const isReady = state.type === "Ready" || isActive;
   const isDownloading = state.type === "Downloading";
+  const progress = isDownloading
+    ? Math.round((state as { type: "Downloading"; progress: number }).progress * 100)
+    : 0;
 
-  const handle = async (fn: () => Promise<void>) => {
-    setBusy(true);
+  // Downloads are fire-and-forget — the backend streams progress via events.
+  // We do NOT await downloadModel() because it only resolves when the download
+  // finishes, which would freeze the button for the entire duration.
+  const handleDownload = () => {
+    setError(null);
+    downloadModel(model.id).catch((e) => setError(String(e)));
+  };
+
+  const handleCancel = () => {
+    cancelDownload(model.id).catch((e) => setError(String(e)));
+  };
+
+  const handleSelect = async () => {
+    setSwitching(true);
     setError(null);
     try {
-      await fn();
+      await switchModel(model.id);
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setSwitching(false);
     }
+  };
+
+  const handleDelete = () => {
+    setError(null);
+    deleteModel(model.id).catch((e) => setError(String(e)));
   };
 
   return (
     <div
-      className={`bg-white rounded-lg border p-4 transition-colors ${
-        isActive ? "border-blue-400 ring-1 ring-blue-200" : "border-gray-200"
+      className={`rounded-lg border bg-white transition-all ${
+        isActive
+          ? "border-blue-400 shadow-sm shadow-blue-100"
+          : "border-gray-200"
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        {/* Info */}
+      {/* Main row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        {/* Status dot */}
+        <div className="flex-shrink-0">
+          {isActive && (
+            <div className="w-2 h-2 rounded-full bg-blue-500" title="Active" />
+          )}
+          {isReady && !isActive && (
+            <div className="w-2 h-2 rounded-full bg-green-400" title="Downloaded" />
+          )}
+          {isDownloading && (
+            <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Downloading" />
+          )}
+          {!isReady && !isDownloading && (
+            <div className="w-2 h-2 rounded-full bg-gray-200" title="Not downloaded" />
+          )}
+        </div>
+
+        {/* Name + description */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-sm font-semibold text-gray-900">{model.displayName}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-gray-900 leading-tight">
+              {model.displayName}
+            </span>
             {isActive && (
-              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
-                Active
+              <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium leading-none">
+                active
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500 mb-1">{model.description}</p>
-          <p className="text-xs text-gray-400">
-            {model.languages} · {formatBytes(model.sizeBytes)}
+          <p className="text-xs text-gray-500 leading-snug mt-0.5 truncate">
+            {model.description}
+            {isReady && (
+              <span className="text-gray-400">
+                {" "}·{" "}
+                {formatBytes(
+                  (state as { type: string; sizeOnDisk: number }).sizeOnDisk
+                )}{" "}
+                on disk
+              </span>
+            )}
+            {!isReady && !isDownloading && (
+              <span className="text-gray-400"> · {formatBytes(model.sizeBytes)}</span>
+            )}
           </p>
-          {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
         </div>
 
-        {/* Language selector (when ready) */}
+        {/* Language selector */}
         {isReady && (
           <select
             value={language}
             onChange={(e) => onLanguageChange(e.target.value)}
-            className="text-xs border border-gray-200 rounded px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-            title="Language"
+            className="text-xs border border-gray-200 rounded px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400 flex-shrink-0"
           >
-            <option value="auto">Auto</option>
-            <option value="en">English</option>
-            <option value="da">Danish</option>
-            <option value="de">German</option>
-            <option value="fr">French</option>
-            <option value="es">Spanish</option>
-            <option value="nl">Dutch</option>
-            <option value="sv">Swedish</option>
-            <option value="no">Norwegian</option>
+            {LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
           </select>
         )}
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {state.type === "NotDownloaded" && (
+            <button
+              onClick={handleDownload}
+              className="text-xs bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1.5 rounded-md font-medium transition-colors"
+            >
+              Download
+            </button>
+          )}
+
+          {isDownloading && (
+            <button
+              onClick={handleCancel}
+              className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-md font-medium transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+
+          {state.type === "Ready" && (
+            <>
+              <button
+                onClick={handleSelect}
+                disabled={switching}
+                className="text-xs bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50"
+              >
+                {switching ? "Loading…" : "Use"}
+              </button>
+              <button
+                onClick={handleDelete}
+                className="text-xs text-gray-400 hover:text-red-500 px-2 py-1.5 rounded-md transition-colors"
+                title="Delete model"
+              >
+                ✕
+              </button>
+            </>
+          )}
+
+          {isActive && (
+            <button
+              onClick={handleDelete}
+              className="text-xs text-gray-400 hover:text-red-500 px-2 py-1.5 rounded-md transition-colors"
+              title="Delete model"
+            >
+              ✕
+            </button>
+          )}
+
+          {state.type === "Error" && (
+            <button
+              onClick={handleDownload}
+              className="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md font-medium transition-colors"
+            >
+              Retry
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress bar — shown below the row when downloading */}
       {isDownloading && (
-        <div className="mt-3">
-          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-200"
-              style={{
-                width: `${Math.round((state as { type: "Downloading"; progress: number }).progress * 100)}%`,
-              }}
-            />
+        <div className="px-4 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <span className="text-xs text-gray-400 w-8 text-right">{progress}%</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">
-            {Math.round((state as { type: "Downloading"; progress: number }).progress * 100)}%
-          </p>
         </div>
       )}
 
-      {/* Disk usage */}
-      {isReady && (
-        <p className="text-xs text-gray-400 mt-2">
-          On disk:{" "}
-          {formatBytes(
-            (state as { type: "Ready" | "Active"; sizeOnDisk: number }).sizeOnDisk
-          )}
-        </p>
+      {/* Error */}
+      {error && (
+        <div className="px-4 pb-3">
+          <p className="text-xs text-red-600">{error}</p>
+        </div>
       )}
-
-      {/* Action buttons */}
-      <div className="flex gap-2 mt-3">
-        {state.type === "NotDownloaded" && (
-          <button
-            onClick={() => handle(() => downloadModel(model.id))}
-            disabled={busy}
-            className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium disabled:opacity-50"
-          >
-            Download
-          </button>
-        )}
-
-        {isDownloading && (
-          <button
-            onClick={() => handle(() => cancelDownload(model.id))}
-            disabled={busy}
-            className="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        )}
-
-        {state.type === "Ready" && (
-          <>
-            <button
-              onClick={() => handle(() => switchModel(model.id))}
-              disabled={busy}
-              className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium disabled:opacity-50"
-            >
-              {busy ? "Loading…" : "Select"}
-            </button>
-            <button
-              onClick={() => handle(() => deleteModel(model.id))}
-              disabled={busy}
-              className="text-xs bg-white hover:bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded font-medium disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </>
-        )}
-
-        {isActive && (
-          <button
-            onClick={() => handle(() => deleteModel(model.id))}
-            disabled={busy}
-            className="text-xs bg-white hover:bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded font-medium disabled:opacity-50"
-          >
-            Delete
-          </button>
-        )}
-
-        {state.type === "Error" && (
-          <button
-            onClick={() => handle(() => downloadModel(model.id))}
-            disabled={busy}
-            className="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded font-medium disabled:opacity-50"
-          >
-            Retry
-          </button>
-        )}
-      </div>
     </div>
   );
 }
