@@ -18,7 +18,7 @@ const TRAY_ID: &str = "main";
 // Using include_bytes! avoids any runtime file-not-found panic and also
 // avoids the crash from calling .unwrap() on default_window_icon() which
 // returns None for LSUIElement (no-Dock) apps on some macOS versions.
-const ICON_BYTES: &[u8] = include_bytes!("../../icons/32x32.png");
+const ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
 fn tray_icon() -> Image<'static> {
     Image::from_bytes(ICON_BYTES)
