@@ -79,11 +79,11 @@ fn check_accessibility() -> bool {
 
 #[tauri::command]
 async fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_shell::ShellExt;
-    app.shell()
-        .open(
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            None,
+            None::<&str>,
         )
         .map_err(|e| e.to_string())
 }
@@ -97,7 +97,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),

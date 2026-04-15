@@ -21,6 +21,6 @@
     "store:allow-keys",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "shell:allow-open"
+    "opener:allow-open-url"
   ]
 }

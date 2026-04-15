@@ -181,12 +181,15 @@ impl Transcriber {
             "auto".to_string()
         };
 
-        // Capture tokio Handle before spawning OS thread
+        // Capture tokio Handle before spawning OS thread.
+        // Clone inner_arc so the closure owns one Arc and the post-spawn
+        // async code below can still use the original.
         let rt = tokio::runtime::Handle::current();
+        let inner_arc_thread = inner_arc.clone();
 
         std::thread::spawn(move || {
             let result = (|| {
-                let mut inner = rt.block_on(inner_arc.lock());
+                let mut inner = rt.block_on(inner_arc_thread.lock());
 
                 let ctx = inner
                     .context

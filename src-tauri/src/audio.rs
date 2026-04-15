@@ -24,9 +24,19 @@ struct Inner {
     /// Wrapped in std Mutex so the cpal audio thread can append without async.
     buffer: Arc<Mutex<Vec<f32>>>,
     /// The active cpal stream (held to keep recording alive).
-    stream: Option<Box<dyn StreamTrait + Send>>,
+    /// `cpal::Stream` is !Send on CoreAudio (it owns ObjC objects tied to the
+    /// creation thread), but we only ever create, use and drop it from the
+    /// single tokio thread that holds the AsyncMutex guard — we never actually
+    /// send it across threads.
+    stream: Option<cpal::Stream>,
     recording: bool,
 }
+
+// SAFETY: Inner is only accessed through AsyncMutex which serialises all
+// access.  The cpal::Stream inside is created, played and dropped on the same
+// logical "owner" — the async task that holds the lock.  We never send the
+// stream value to a different OS thread.
+unsafe impl Send for Inner {}
 
 impl Inner {
     fn new() -> Self {
@@ -73,9 +83,8 @@ impl AudioManager {
         );
 
         // Clear the buffer for the new recording session
-        let buffer = Arc::clone(&inner.buffer);
         {
-            let mut buf = buffer.lock().expect("buffer lock");
+            let mut buf = inner.buffer.lock().expect("buffer lock");
             buf.clear();
         }
 
@@ -127,7 +136,7 @@ impl AudioManager {
 
         stream.play()?;
 
-        inner.stream = Some(Box::new(stream));
+        inner.stream = Some(stream);
         inner.recording = true;
 
         let _ = app.emit("audio-state", AudioState::Recording);

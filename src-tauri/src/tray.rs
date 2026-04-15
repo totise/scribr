@@ -20,7 +20,7 @@ pub fn setup(app: &AppHandle, settings: &Settings) -> Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(app.default_window_icon().cloned().unwrap())
         .menu(&menu)
-        .menu_on_left_click(true)
+        .show_menu_on_left_click(true)
         .tooltip("Scribr")
         .title("Scribr")
         .on_menu_event(handle_menu_event)
