@@ -24,12 +24,16 @@ pub struct ModelInfo {
 
 /// Runtime state of a model entry (download + selection).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type")]
 pub enum ModelState {
     NotDownloaded,
+    #[serde(rename_all = "camelCase")]
     Downloading { progress: f32 },
+    #[serde(rename_all = "camelCase")]
     Ready { path: String, size_on_disk: u64 },
+    #[serde(rename_all = "camelCase")]
     Active { path: String, size_on_disk: u64 },
+    #[serde(rename_all = "camelCase")]
     Error { message: String },
 }
 
